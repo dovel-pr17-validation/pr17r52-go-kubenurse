@@ -1,0 +1,345 @@
+[![CI](https://github.com/postfinance/kubenurse/actions/workflows/release.yml/badge.svg)](https://github.com/postfinance/kubenurse/actions/workflows/release.yml)
+[![Coverage Status](https://coveralls.io/repos/github/postfinance/kubenurse/badge.svg?branch=master)](https://coveralls.io/github/postfinance/kubenurse?branch=master)
+![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/postfinance/kubenurse)
+
+<!-- DocToc command: doctoc --notitle README.md --update-only --maxlevel 2 -->
+
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+
+- [Kubenurse](#kubenurse)
+  - [Grafana dashboard](#grafana-dashboard)
+  - [Metrics](#metrics)
+  - [Deployment](#deployment)
+    - [Helm deployment](#helm-deployment)
+      - [Helm parameters](#helm-parameters)
+    - [Configuration](#configuration)
+  - [HTTP Endpoints](#http-endpoints)
+  - [Health Checks](#health-checks)
+    - [API Server Direct](#api-server-direct)
+    - [API Server DNS](#api-server-dns)
+    - [Me Ingress](#me-ingress)
+    - [Me Service](#me-service)
+    - [Neighbourhood](#neighbourhood)
+  - [Neighbourhood filtering](#neighbourhood-filtering)
+    - [Neighbourhood incoming checks metric](#neighbourhood-incoming-checks-metric)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+# Kubenurse
+
+Kubenurse is a little service that monitors all network connections in a
+Kubernetes cluster. Kubenurse measures request durations, records errors and
+exports those metrics in Prometheus format.
+
+Here's an overview of the checks performed by kubenurse, which are exposed as
+labels for the various duration/error prometheus metrics.
+
+![kubenurse request types](./doc/kubenurse.png)
+
+## Grafana dashboard
+
+Once the kubenurse pods are up and running and scraped by your metrics agent,
+you can import the [example dashboard](./doc/grafana-kubenurse.json) to start
+scrutinizing network latencies and errors.
+
+![Grafana overview](doc/grafana.png "Grafana ingress view")
+
+## Metrics
+
+All performed checks expose metrics which can be used to monitor/alert:
+
+- node-to-node network latencies and errors
+- pod-to-apiserver communication
+- Ingress roundtrip latencies and errors
+- Service roundtrip latencies and errors (kube-proxy / your CNI)
+- Major kube-apiserver issues
+- kube-dns (or CoreDNS) errors
+- External DNS resolution errors (ingress URL resolution)
+
+At `/metrics` you will find the following metrics:
+
+| metric name                                           | labels               | description                                                                                                                  |
+| ----------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| ~~`kubenurse request duration`~~                      | `type`               | (deprecated since v1.13.0) latency histogram for request duration, replaced with the metric below.                           |
+| `kubenurse httpclient request duration seconds`       | `type`               | latency histogram for request duration, partitioned by request type                                                          |
+| `kubenurse httpclient trace request duration seconds` | `type, event`        | latency histogram for httpclient _trace_ metric instrumentation, partitioned by request type and httptrace connection events |
+| `kubenurse httpclient requests total`                 | `type, code, method` | counter for the total number of http requests, partitioned by HTTP code, method, and request type                            |
+| `kubenurse errors total`                              | `type, event`        | error counter, partitioned by httptrace event and request type                                                               |
+| `kubenurse neighbourhood incoming checks`             | n\a                  | gauge which reports how many unique neighbours have queried the current pod in the last minute                               |
+
+For metrics partitioned with a `type` label, it is possible to precisely know
+which request type increased an error counter, or to compare the latencies of
+multiple request types, for example compare how your service and ingress
+latencies differ.
+
+Some `event` labels include `dns_start`, `got_conn`, `tls_handshake_done`, and
+more. the details can be  seen in the
+[`httptrace.go`](https://github.com/postfinance/kubenurse/blob/v1.13.0/internal/servicecheck/httptrace.go#L91)
+file.
+
+## Deployment
+
+You can get the Docker image from [Docker Hub](https://hub.docker.com/r/postfinance/kubenurse/).
+The [examples](https://github.com/postfinance/kubenurse/tree/master/examples) directory
+contains manifests which can be used to deploy kubenurse to the kube-system namespace of your cluster.
+
+### Helm deployment
+
+You can also deploy kubenurse with Helm. The Chart is published to `https://postfinance.github.io/kubenurse/` and a new version is released for every kubenurse tag.
+
+To install the latest version:
+
+```bash
+helm repo add kubenurse https://postfinance.github.io/kubenurse/
+helm repo update
+helm upgrade --install kubenurse kubenurse/kubenurse
+```
+
+To install a specific, reproducible version, use the `--version` flag with the chart version (without the leading `v`):
+
+```bash
+helm upgrade --install kubenurse kubenurse/kubenurse --version 1.15.3
+```
+
+The available chart versions are listed in the repository's `index.yaml` at <https://postfinance.github.io/kubenurse/index.yaml>.
+
+The chart source can also be found in the local directory `./helm/kubenurse/`.
+
+#### Helm parameters
+
+<details>
+<summary>helm parameters list</summary>
+
+| Setting                                | Description                                                                                                          | Default                            |
+|----------------------------------------|----------------------------------------------------------------------------------------------------------------------|------------------------------------|
+| daemonset.image.repository             | The repository name                                                                                                  | `postfinance/kubenurse`            |
+| daemonset.image.tag                    | The tag/ version of the image                                                                                        | `v1.4.0`                           |
+| daemonset.podLabels                    | Additional labels to be added to the pods of the daemonset                                                           | `[]`                               |
+| daemonset.podAnnotations               | Additional annotations to be added to the pods of the daemonset                                                      | `[]`                               |
+| daemonset.podSecurityContext           | The security context of the daemonset                                                                                | `{}`                               |
+| daemonset.priorityClassName            | The priority class name for the daemonset pods                                                                       | `""`                               |
+| daemonset.containerSecurityContext     | The security context of the containers within the pods of the daemonset                                              | `{}`                               |
+| daemonset.containerResources           | The container resources of the containers within the pods of the daemonset                                           | `{}`                               |
+| daemonset.containerImagePullPolicy     | The container image pull policy the pods of the daemonset                                                            | `IfNotPresent`                     |
+| daemonset.tolerations                  | The tolerations of the daemonset                                                                                     | See Default tolerations below      |
+| daemonset.dnsConfig                    | Specifies the DNS parameters of the pods in the daemonset                                                            | `{}`                               |
+| daemonset.volumeMounts                 | Additional volumeMounts to be added to the pods of the daemonset                                                     | `[]`                               |
+| daemonset.volumes                      | Additional volumes to be added to the daemonset                                                                      | `[]`                               |
+| daemonset.rollingUpdate.maxUnavailable | The maximum number of DaemonSet pods that can be unavailable during the update                                       | `34%`                              |
+| daemonset.rollingUpdate.maxSurge       | The maximum number of nodes with an existing available DaemonSet pod that can have an updated pod during an update   |                                    |
+| serviceMonitor.enabled                 | Adds a ServiceMonitor for use with [Prometheus-operator](https://github.com/prometheus-operator/prometheus-operator) | `false`                            |
+| serviceMonitor.labels                  | Additional labels to be added to the ServiceMonitor                                                                  | `{}`                               |
+| serviceMonitor.relabelings             | Additional relabelings to be added to the endpoint of the ServiceMonitor                                             | `[]`                               |
+| serviceAccount.name                    | The name of the service account which is used                                                                        | `Release.Name`                     |
+| service.name                           | The name of service which exposes the kubenurse application                                                          | `8080-8080`                        |
+| service.port                           | The port number of the service                                                                                       | `8080`                             |
+| service.labels                         | Additional labels to be added to the Service                                                                         |                                    |
+| ingress.enabled                        | Enable/ Disable the ingress                                                                                          | `true`                             |
+| ingress.className                      | The classname of the ingress controller (e.g. the nginx ingress controller)                                          | `nginx`                            |
+| ingress.url                            | The url of the ingress; e.g. kubenurse.westeurope.cloudapp.example.com                                               | `dummy-kubenurse.example.com`      |
+| insecure                               | Set `KUBENURSE_INSECURE` environment variable                                                                        | `true`                             |
+| allow_unschedulable                    | Sets `KUBENURSE_ALLOW_UNSCHEDULABLE` environment variable                                                            | `false`                            |
+| neighbour_filter                       | Sets `KUBENURSE_NEIGHBOUR_FILTER` environment variable                                                               | `app.kubernetes.io/name=kubenurse` |
+| neighbour_limit                        | Sets `KUBENURSE_NEIGHBOUR_LIMIT` environment variable                                                                | `10`                               |
+| victoriametrics_histogram              | Sets `KUBENURSE_VICTORIAMETRICS_HISTOGRAM` environment variable                                                      | `false`                            |
+| histogram_buckets                      | Sets `KUBENURSE_HISTOGRAM_BUCKETS` environment variable                                                              |                                    |
+| expose_metadata                        | Sets `KUBENURSE_EXPOSE_METADATA` environment variable                                                                | `false`                            |
+| extra_ca                               | Sets `KUBENURSE_EXTRA_CA` environment variable                                                                       |                                    |
+| extra_checks                           | Sets `KUBENURSE_EXTRA_CHECKS` environment variable                                                                   |                                    |
+| kubernetes_service_dns                 | Sets `KUBERNETES_SERVICE_DNS` environment variable                                                                   |                                    |
+| check_api_server_direct                | Sets `KUBENURSE_CHECK_API_SERVER_DIRECT` environment variable                                                        | `true`                             |
+| check_api_server_dns                   | Sets `KUBENURSE_CHECK_API_SERVER_DNS` environment variable                                                           | `true`                             |
+| check_me_ingress                       | Sets `KUBENURSE_CHECK_ME_INGRESS` environment variable                                                               | `true`                             |
+| check_me_service                       | Sets `KUBENURSE_CHECK_ME_SERVICE` environment variable                                                               | `true`                             |
+| check_neighbourhood                    | Sets `KUBENURSE_CHECK_NEIGHBOURHOOD` environment variable                                                            | `true`                             |
+| check_interval                         | Sets `KUBENURSE_CHECK_INTERVAL` environment variable                                                                 | `5s`                               |
+| reuse_connections                      | Sets `KUBENURSE_REUSE_CONNECTIONS` environment variable                                                              | `false`                            |
+| use_tls                                | Sets `KUBENURSE_USE_TLS` environment variable                                                                        | `false`                            |
+| cert_file                              | Sets `KUBENURSE_CERT_FILE` environment variable                                                                      |                                    |
+| cert_key                               | Sets `KUBENURSE_CERT_KEY` environment variable                                                                       |                                    |
+
+</details>
+
+### Configuration
+
+<details>
+<summary>kubenurse environment variables list</summary>
+
+- `KUBENURSE_INGRESS_URL`: An URL to the kubenurse in order to check the ingress
+- `KUBENURSE_SERVICE_URL`: An URL to the kubenurse in order to check the Kubernetes service
+- `KUBENURSE_INSECURE`: If "true", TLS connections will not validate the certificate
+- `KUBENURSE_EXTRA_CA`: Additional CA cert path for TLS connections
+- `KUBENURSE_EXTRA_CHECKS`: Additional checks, specified as a list (separated by a vertical bar `|`) where each entry of the list has the format: `<metric_name>:<url_to_check>`. For example `google:https://www.google.ch/|cloudflare:https://www.cloudflare.com/`
+- `KUBENURSE_NAMESPACE`: Namespace in which to look for the neighbour kubenurses
+- `KUBENURSE_NEIGHBOUR_FILTER`: A Kubernetes label selector (eg. `app=kubenurse`) to filter neighbour kubenurses
+- `KUBENURSE_NEIGHBOUR_LIMIT`: The maximum number of neighbours each kubenurse will query
+- `KUBENURSE_ALLOW_UNSCHEDULABLE`: If this is `"true"`, path checks to neighbouring kubenurses are made even if they are running on unschedulable nodes.
+- `KUBENURSE_CHECK_API_SERVER_DIRECT`: If this is `"true"` kubenurse will perform the check [API Server Direct](#API Server Direct). default is "true"
+- `KUBENURSE_CHECK_API_SERVER_DNS`: If this is `"true"`, kubenurse will perform the check [API Server DNS](#API Server DNS). default is "true"
+- `KUBENURSE_CHECK_ME_INGRESS`: If this is `"true"`, kubenurse will perform the check [Me Ingress](#Me Ingress). default is "true"
+- `KUBENURSE_CHECK_ME_SERVICE`: If this is `"true"`, kubenurse will perform the check [Me Service](#Me Service). default is "true"
+- `KUBENURSE_CHECK_NEIGHBOURHOOD`: If this is `"true"`, kubenurse will perform the check [Neighbourhood](#neighbourhood). default is "true"
+- `KUBENURSE_CHECK_INTERVAL`: the frequency to perform kubenurse checks. the string should be formatted for [time.ParseDuration](https://pkg.go.dev/time#ParseDuration). defaults to `5s`
+- `KUBENURSE_REUSE_CONNECTIONS`: whether to reuse connections or not for all checks. default is "false"
+- `KUBENURSE_VICTORIAMETRICS_HISTOGRAM`: if this is "true", kubenurse exposes VictoriaMetrics histograms (i.e. `vmrange` buckets instead of the default Prometheus `le` buckets) 
+- `KUBENURSE_HISTOGRAM_BUCKETS`: optional comma-separated list of float64, used in place of the [default prometheus histogram buckets](https://pkg.go.dev/github.com/prometheus/client_golang@v1.16.0/prometheus#DefBuckets)
+- `KUBENURSE_EXPOSE_METADATA`: If this is `"true"`, expose TYPE and HELP metadata at the /metrics page
+- `KUBENURSE_USE_TLS`: If this is `"true"`, enable TLS endpoint on port 8443
+- `KUBENURSE_CERT_FILE`: Certificate to use with TLS endpoint
+- `KUBENURSE_CERT_KEY`: Key to use with TLS endpoint
+
+Following variables are injected to the Pod by Kubernetes and should not be defined manually:
+
+- `KUBERNETES_SERVICE_HOST`: Host to communicate to the kube-apiserver
+- `KUBERNETES_SERVICE_PORT`: Port to communicate to the kube-apiserver
+
+The DNS name of the API server can be configured with the
+`KUBERNETES_SERVICE_DNS` environment variable, and it defaults to
+`kubernetes.default.svc.cluster.local`.
+
+</details>
+
+## HTTP Endpoints
+
+The kubenurse service listens for http requests on port 8080 (optionally https on port 8443) and exposes endpoints:
+
+- `/`: Redirects to `/alive`
+- `/alive`: Returns a pretty printed JSON with the check results, described below
+- `/alwayshappy`: Returns http-200 which is used for testing itself
+- `/metrics`: Exposes [Prometheus](https://prometheus.io/) metrics
+
+The `/alive` endpoint returns a JSON like this with status code 200 if everything is OK else 500:
+
+```json
+{
+  "api_server_direct": "ok",
+  "api_server_dns": "ok",
+  "me_ingress": "ok",
+  "me_service": "ok",
+  "hostname": "kubenurse-1234-x2bwx",
+  "neighbourhood_state": "ok",
+  "neighbourhood": [
+   {
+    "PodName": "kubenurse-1234-8fh2x",
+    "PodIP": "10.10.10.67",
+    "HostIP": "10.12.12.66",
+    "NodeName": "k8s-66.example.com",
+    "Phase": "Running"
+   },
+   {
+    "PodName": "kubenurse-1234-ffjbs",
+    "PodIP": "10.10.10.138",
+    "HostIP": "10.12.12.89",
+    "NodeName": "k8s-89.example.com",
+    "Phase": "Running"
+   }
+  ],
+  "headers": {
+   "Accept": [
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8"
+   ],
+   "Accept-Encoding": [
+    "gzip, deflate, br"
+   ],
+   ...
+  }
+}
+```
+
+## Health Checks
+
+Every five seconds, the checks described below are run.
+
+### API Server Direct
+
+Checks the `/version` endpoint of the Kubernetes API Server through
+the direct link (`KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`).
+
+Metric type: `api_server_direct`
+
+### API Server DNS
+
+Checks the `/version` endpoint of the Kubernetes API Server through
+the Cluster DNS URL `https://kubernetes.default.svc:$KUBERNETES_SERVICE_PORT`.
+This also verifies a working `kube-dns` deployment.
+
+Metric type: `api_server_dns`
+
+### Me Ingress
+
+Checks if the kubenurse is reachable at the `/alwayshappy` endpoint behind the ingress.
+This address is provided by the environment variable `KUBENURSE_INGRESS_URL` that
+could look like `https://kubenurse.example.com`.
+This also verifies a correct upstream DNS resolution.
+
+Metric type: `me_ingress`
+
+### Me Service
+
+Checks if the kubenurse is reachable at the `/alwayshappy` endpoint through the Kubernetes service.
+The address is provided by the environment variable `KUBENURSE_SERVICE_URL` that
+could look like `http://kubenurse.mynamespace.default.svc:8080`.
+This also verifies a working `kube-proxy` setup.
+
+Metric type: `me_service`
+
+### Neighbourhood
+
+Checks if every neighbour kubenurse is reachable at the `/alwayshappy` endpoint.
+Neighbours are discovered by querying the kube-apiserver for every Pod in the
+`KUBENURSE_NAMESPACE` with label `KUBENURSE_NEIGHBOUR_FILTER`.
+The request is done directly to the Pod-IP (port 8080, or 8443 if TLS is enabled) and the metric types contains the prefix
+`path_` and the hostname of the kubelet on which the neighbour kubenurse should run.
+Only kubenurses on nodes that are schedulable are considered as neighbours,
+this can be changed by setting `KUBENURSE_ALLOW_UNSCHEDULABLE="true"`.
+
+Metric type: `path_$KUBELET_HOSTNAME`
+
+## Neighbourhood filtering
+
+The number of checks for the neighbourhood used to grow as $O(N^2)$, which
+rendered `kubenurse` impractical on large clusters, as documented in issue
+[#55](https://github.com/postfinance/kubenurse/issues/55).
+To combat this, a node filtering feature was implemented, which works as follows
+
+- kubenurse computes the `sha256` checksums for all neighbours' node names
+- it sorts those checksums (this is actually implemented with a max-heap)
+- it computes its own node name checksum, and queries the next 10 (per default)
+  nodes in the sorted checksums list
+
+Here's an example with 6 nodes, where each node queries the next 3 nodes:
+
+![node filtering drawing](./doc/kubenurse-node-filtering.png)
+
+Thanks to this, every node is making queries to the same 10 nodes, unless one
+of those nodes disappears, in which case kubenurse will pick the next node in
+the sorted checksums list. This comes with several advantages:
+
+- because of the way we first hash the node names, the checks are randomly
+  distributed, independant of the node names. if we only picked the 10 next
+  nodes in a sorted list of the node names, then we might have biased the
+  results in environments where node names are sequential
+- metrics-wise, a `kubenurse` pod should typically only have entries for ca. 10
+  other neighbouring nodes worth of checks, which greatly reduces the load on
+  your monitoring infrastructure
+- because we use a deterministic algorithm to choose which nodes to query, the
+  metrics churn rate stays minimal. (that is, if we randomly picked 10 nodes
+  for every check, then in the end there would be one prometheus bucket for
+  every node on the cluster, which would put useless load on the monitoring
+  infrastructure)
+
+Per default, the neighbourhood filtering is set to 10 nodes, which means that
+on cluster with more than 10 nodes, each kubenurse will query exactly 10 nodes,
+as described above.
+
+### Neighbourhood incoming checks metric
+
+It is possible to check that each node receives the proper number of
+neighbourhood queries with the `kubenurse_neighbourhood_incoming_checks`
+metric. If you have the neighbourhood limit set to e.g. 10, then this
+metric should be equal to 10 on all nodes, with some variations during a
+rollout restart.
+
+To bypass the node filtering feature, you simply need to set the
+`KUBENURSE_NEIGHBOUR_LIMIT` environment variable to 0.

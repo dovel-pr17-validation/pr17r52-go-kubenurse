@@ -1,0 +1,54 @@
+---
+version: 2
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    main: main.go
+    binary: kubenurse
+    id: kubenurse
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+upx:
+  - enabled: true
+    goos:
+      - linux
+    compress: best
+    lzma: true
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+
+dockers_v2:
+  - images:
+      - postfinance/kubenurse
+      - ghcr.io/postfinance/kubenurse
+    tags:
+      - "{{ .Tag }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: Dockerfile.goreleaser
+
+checksum:
+  name_template: 'checksums.txt'
+
+release:
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'

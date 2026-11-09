@@ -1,0 +1,118 @@
+daemonset:
+  image:
+    repository: postfinance/kubenurse
+    # tag: v1.7.0 # uncomment if you want to manually specify the tag
+  extraEnvs: []
+  podLabels: {}
+  podAnnotations: {}
+  podSecurityContext: {}
+  containerSecurityContext: {}
+  containerResources: {}
+  containerImagePullPolicy: IfNotPresent
+  tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+    operator: Equal
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Equal
+  dnsConfig: {}
+  # dnsConfig: # recommended config
+  #   options:
+  #   - name: ndots
+  #     value: "1"
+  volumeMounts: []
+  volumes: []
+  priorityClassName: ""
+  rollingUpdate:
+    maxUnavailable: 34%
+    # maxSurge:
+
+serviceMonitor:
+  enabled: false
+  labels: {}
+  relabelings: []
+  # - sourceLabels: [__meta_kubernetes_pod_node_name]
+  #   separator: ;
+  #   regex: ^(.*)$
+  #   targetLabel: nodename
+  #   replacement: $1
+  #   action: replace
+
+# environment variables
+#
+# KUBENURSE_INSECURE
+insecure: true
+# KUBENURSE_SERVICE_URL
+service_url: ""
+# KUBERNETES_SERVICE_DNS
+kubernetes_service_dns: "kubernetes.default.svc.cluster.local"
+# KUBENURSE_ALLOW_UNSCHEDULABLE
+allow_unschedulable: false
+# KUBENURSE_NEIGHBOUR_FILTER
+neighbour_filter: app.kubernetes.io/name=kubenurse
+# KUBENURSE_NEIGHBOUR_LIMIT
+neighbour_limit: 10
+# KUBENURSE_HISTOGRAM_BUCKETS
+histogram_buckets: ""
+# KUBENURSE_EXPOSE_METADATA
+expose_metadata: false
+# histogram_buckets: ".0005,.001,.0025,.005,.01,.025,.05,0.1,0.25,0.5,1" # default prometheus histogram buckets divided by 10
+# KUBENURSE_VICTORIAMETRICS_HISTOGRAM
+victoriametrics_histogram: false
+# KUBENURSE_EXTRA_CA
+extra_ca: ""
+# KUBENURSE_EXTRA_CHECKS
+extra_checks: ""
+# KUBENURSE_CHECK_API_SERVER_DIRECT
+check_api_server_direct: true
+# KUBENURSE_CHECK_API_SERVER_DNS
+check_api_server_dns: true
+# KUBENURSE_CHECK_ME_INGRESS
+check_me_ingress: true
+# KUBENURSE_CHECK_ME_SERVICE
+check_me_service: true
+# KUBENURSE_CHECK_NEIGHBOURHOOD
+check_neighbourhood: true
+# KUBENURSE_CHECK_INTERVAL
+check_interval: 5s
+# KUBENURSE_REUSE_CONNECTIONS
+reuse_connections: false
+# KUBENURSE_SHUTDOWN_DURATION
+shutdown_duration: 5s
+# KUBENURSE_USE_TLS
+use_tls: false
+# KUBENURSE_CERT_FILE
+cert_file: ""
+# KUBENURSE_CERT_KEY
+cert_key: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+# List of image pull secrets to attach to all pods
+imagePullSecrets: []
+# - name: my-registry-secret
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name:
+
+service:
+  name: 8080-8080
+  port: 8080
+  labels: {}
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  tlsSecretName: ""
+  # KUBENURSE_INGRESS_URL
+  url: dummy-kubenurse.example.com
+
+# Array of extra K8s manifests to deploy
+extraObjects: []
